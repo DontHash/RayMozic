@@ -22,3 +22,7 @@ Thumbs.db
 # Local temp audio
 *.tmp
 *.temp
+
+# Saved analysis runs (export manually for benchmark sharing)
+results/*.json
+!results/.gitkeep
