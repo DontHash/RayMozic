@@ -1,18 +1,39 @@
 # DSP Music Analysis & Guitar Resonance App — Project Spec
 
-> **Status: Foundation App (v0.1)** — Core features are implemented and wired through a Streamlit UI. This document describes project objectives, the DSP foundations they rely on, and what the current codebase delivers. Future enhancements are listed separately; removed are build steps and pseudocode for work not yet performed.
+> **Status: Live App (v0.2)** — The app now does GuitarTuna-style **live microphone** analysis with a calibrated tuner needle and a live FFT spectrum, plus a dedicated guitar tuner. Server-side recording (sounddevice) is removed from the UI; input is either **live browser mic** or **file upload**. This document describes project objectives, the DSP foundations, and what the codebase delivers. Future enhancements are listed separately.
 
 ---
 
 ## Project Overview
 
-A Python-based audio analysis app with three core features:
+A Python-based audio analysis app with four core capabilities:
 
-1. **Vocal Range & Register Detector** — identify singer's range and voice register (chest, neck/head, nasal)
-2. **Guitar Scale Resonance Matcher** — match singer's natural pitch center to optimal guitar key/capo position
-3. **Voice Modulation Comparator** — compare user's singing against a reference track (original artist)
+1. **Guitar Tuner (Live)** — real-time pitch tracking from the browser mic, a calibrated needle (cents off target), selectable tunings, and a live FFT spectrum with the detected fundamental marked
+2. **Vocal Range & Register Detector** — live or upload; identify range, register (chest / neck / head), and nasal tone
+3. **Key, Capo & Chords** — detect a vocal clip's key, auto-generate a diatonic chord progression, and show beginner-friendly capo guides (finger shapes vs. sounding chords for every open-chord family)
+4. **Voice Modulation Comparator** — compare an uploaded vocal against a reference track (pitch, vibrato, dynamics)
 
 **Guitar only.** No other instruments in scope.
+
+---
+
+## Live Feedback Design (v0.2 / v0.3)
+
+- **Browser mic capture:** `streamlit-webrtc` streams audio frames from the browser to Python (works over the network, unlike server-side `sounddevice`). A rolling buffer of recent samples is analyzed every loop iteration.
+- **Pitch detection (live):** two selectable detectors in `utils/dsp_live.py`:
+  - **Autocorrelation** with a "first strong peak" rule — robust against octave errors, accurate at low frequencies (guitar low-E ≈ 82 Hz), parabolic sub-sample interpolation.
+  - **HPS (Harmonic Product Spectrum)** on a zero-padded, Hann-windowed FFT — mechanism adopted from **TomSchimansky/GuitarTuner**: the spectrum is multiplied by decimated copies of itself so harmonics reinforce the fundamental; zero-padding gives sub-cent resolution near A4.
+- **Temporal smoothing:** `PitchSmoother` (mechanism from **Mocha-Yuan/MoChord**) applies median smoothing, a short dropout hold (prevents needle flicker), and octave-jump correction (rejects single-frame harmonic/subharmonic flips). RMS gating + a clarity threshold reject silence and unstable frames.
+- **FFT spectrum:** `numpy` real FFT (Hann-windowed) produces the single-sided magnitude spectrum shown live; the detected fundamental is marked with a vertical line so you can see which frequency drives the note.
+- **Needle UI:** a Plotly gauge (`utils/visuals.py`) shows cents deviation (−50..+50) with a green in-tune band; constantly recalibrated each frame.
+- **Tuner stability & confirmation:** the tuner tab uses a note-stability counter (only locks a string after a few consistent frames) and confirms "in tune" after several consecutive in-tune frames — GuitarTuner's stability mechanism.
+- **Tuner:** `utils/tuner.py` maps the detected pitch to the nearest string of the selected tuning and reports tune-up/down direction. Tunings: Standard, Drop D, **Low C**, Half/Full step down, Open G, Open D, DADGAD, plus **Custom** (define six strings). **Adjustable A4 reference (432–445 Hz)** recalculates all targets.
+
+## Chord Intelligence (v0.3, MoChord-inspired)
+
+- **Smart voicing recommender** (`utils/chord_voicing.py`): parses a chord symbol, searches the fretboard (frets 0–12) per position window, and scores candidate voicings by chord-tone coverage, root presence, bass-is-root, open-string use, fret span, internal-mute penalty, neck position, and hand ergonomics (finger count with barre detection). Rejects >4-finger and over-stretched shapes. Reproduces the standard open chords (E `022100`, C `x32010`, G `320003`, Am `x02210`, D `xx0232`, …).
+- **Progression generator** (`utils/progression.py`): a deterministic, offline diatonic generator (MoChord's local/fallback path — no external AI/API). Given a key, mode, and degree pattern (numbers `1-5-6-4` or Roman `I-V-vi-IV`), it returns chord names, Roman numerals, and harmonic function, with a beginner (triads) / pro (7th chords, dominant V) toggle and common-pattern presets.
+- **Shared music theory** (`utils/music_theory.py`): note/pitch-class conversion, chord parsing (`CHORD_INTERVALS`), and diatonic scale/seventh tables.
 
 ---
 
@@ -20,12 +41,15 @@ A Python-based audio analysis app with three core features:
 
 ```
 Python 3.10+
-librosa          # audio loading, STFT, pitch tracking, chroma, DTW
-numpy            # DSP math
-scipy            # signal filtering, Welch PSD, Butterworth filters
-sounddevice      # real-time mic recording
-matplotlib       # pitch alignment plots in the comparator tab
+librosa          # audio loading, STFT, chroma, YIN, DTW (batch/upload analysis)
+numpy            # DSP math, FFT, autocorrelation
+scipy            # FFT helpers, filtering, Welch PSD, Butterworth filters
 streamlit        # UI
+streamlit-webrtc # live browser microphone capture (WebRTC)
+plotly           # tuner needle gauge + live FFT spectrum
+av               # audio frame decoding for WebRTC
+matplotlib       # legacy/optional plots
+sounddevice      # legacy (no longer used by the UI)
 ```
 
 Install dependencies:
@@ -150,36 +174,51 @@ Used via `librosa.sequence.dtw()` in the voice comparator. Chroma columns are sa
 
 Given a recorded vocal sample (5–15 seconds of sustained singing or scale runs):
 
-- Output: lowest note, highest note, natural/modal pitch, dominant register, nasal tone flag
+- Output: lowest note, highest note, natural/modal pitch, register (with confidence + evidence), belt & nasal flags, and the raw acoustic features that drove the decision.
 
-### Current Implementation (`features/vocal_range.py`)
+### Current Implementation (`features/vocal_range.py`, `utils/voice_features.py`, `utils/register.py`)
 
-- **Input:** Upload (WAV, MP3, FLAC, etc.) or microphone recording via Streamlit
-- **Pitch tracking:** YIN over C2–C7 at 22,050 Hz sample rate
-- **Range:** 5th/95th percentile for low/high; median for modal pitch
-- **Register:** Classified from modal f0 (`utils/pitch_utils.classify_register`)
-- **Nasal detection:** Welch PSD comparing 200–300 Hz and 2000–3000 Hz bands against a 500–1500 Hz mid-band
-- **Validation:** Rejects empty, silent, or too-short audio (`utils/audio_io.validate_audio_signal`)
+Registers are treated as **acoustic + laryngeal patterns**, not pitch labels. The
+classifier combines pitch with the spectral signature of the voice so the same
+note can read as chest, head, or belt depending on how the harmonics are shaped.
+
+- **Input:** Upload (WAV, MP3, FLAC, etc.) or live microphone via WebRTC.
+- **Pitch tracking:** YIN over C2–C7 at 22,050 Hz; range = 5th/95th percentile, modal = median.
+- **Acoustic feature vector (`utils/voice_features.py`):**
+  - **Spectral tilt** (dB/kHz) — power-weighted log-magnitude slope; shallow tilt = strong upper harmonics (chest/belt), steep tilt = energy near f0 (head/falsetto).
+  - **HNR** — Boersma short-term autocorrelation method (`10·log10(r/(1−r))`); clean vs. breathy tone.
+  - **HF energy ratio** and **spectral centroid** — spectral balance / brightness.
+  - **Nasal-band ratio** — energy near 250 Hz + 2–3 kHz vs. the 500–1500 Hz mid-band.
+- **Register decision (`utils/register.py`):** transparent weighted rules over pitch + tilt + HF energy + HNR → `{Chest, Mixed, Head, Falsetto}` with a 0–1 confidence, per-register scores, and a human-readable list of the evidence. A **belt** flag fires on high pitch with chest-like (shallow) tilt and strong HF energy; a **nasal** flag fires on elevated nasal-band energy.
+- **Validation:** Rejects empty, silent, or too-short audio (`utils/audio_io.validate_audio_signal`).
+
+Scope note: formant estimation (F1–F4 via LP/WLP) and glottal inverse filtering
+(closed quotient, amplitude quotient QA) are documented in **References** as the
+next tier of features; the current build uses the spectral-envelope proxies
+above, which are robust in real time and require no per-period glottal modeling.
 
 ---
 
-## Feature 2 — Guitar Scale Resonance Matcher
+## Feature 2 — Key, Capo & Chords (Play-Along Planner)
 
 ### Goal
 
-Given a vocal recording, determine:
+Given a vocal recording, give beginners **actionable guitar guidance** — not just a key label:
 
-- Singer's pitch center (key)
-- Which standard guitar key/chord shapes resonate best
-- Recommended capo fret
-- Alternative chord progressions in matched key
+- Singer's pitch center (key + mode)
+- An **auto-generated chord progression** that fits the detected key (Pop I–V–vi–IV for major, Andalusian for minor)
+- **Every capo option** (G / A / C / D / E / F shapes): finger chords vs. sounding chords, with plain-English explanations
+- Optional customization for advanced users (pattern presets, custom progression, 7th chords)
+- Fretboard diagrams for the recommended capo row
 
-### Current Implementation (`features/scale_matcher.py`)
+### Current Implementation (`utils/play_along.py`, `features/scale_matcher.py`, `utils/progression.py`)
 
-- **Input:** Vocal audio from Tab 1 session state (run Vocal Range Analysis first)
-- **Key detection:** Mean chroma + Krumhansl–Schmuckler major/minor profiles (`utils/chroma_utils.detect_key`)
-- **Capo recommendations:** Top 3 options across guitar-friendly open shapes (G, A, C, D, E, F), ranked by lowest capo fret
-- **Chord transposition:** Space-separated progression transposed by semitones (e.g. `G Em C D`)
+- **Input:** Uploaded clip + your **finger shapes** (e.g. `Am Em Dm F` — what you play with no capo)
+- **Key detection:** Mean chroma + Krumhansl–Schmuckler major/minor profiles
+- **Capo scan (0–7):** Finger shapes stay **fixed**; capo *raises* pitch so each fret produces **different sounding chords**. We score each row against your detected key and recommend the best capo.
+- **Capo 0 warning:** If open strings don't fit your voice, we say so explicitly and point to a better fret.
+- **Alternatives:** Other diatonic progressions in your vocal key if you want different material (not capo-shifted copies).
+- **Auto mode:** If you leave shapes blank, we suggest comfortable G / Am open patterns and still run the capo scan.
 
 ### Guitar Standard Tuning (open strings)
 
@@ -203,13 +242,30 @@ Load original song audio + user recording. Compare:
 
 ### Current Implementation (`features/comparator.py`)
 
-- **Input:** Reference track (sidebar upload) + user upload or microphone recording
+- **Input:** Reference track (sidebar upload) + user upload (no local recording)
 - **Pitch tracking:** YIN on both tracks
 - **Alignment:** DTW on sanitized chroma STFT features
 - **Pitch deviation:** Mean absolute cents error along the warping path
 - **Vibrato:** Butterworth low-pass on voiced f0, FFT of pitch modulation in 4–9 Hz band
 - **Dynamics:** RMS envelope correlation aligned via the same DTW path
-- **Visualization:** Matplotlib plot of aligned reference vs. user pitch in the UI
+- **Visualization:** Plotly plot of aligned reference vs. user pitch in the UI
+
+---
+
+## Feature 4 — Guitar Tuner (Live)
+
+### Goal
+
+Tune a guitar in real time from the browser microphone, GuitarTuna-style.
+
+### Current Implementation (`utils/tuner.py`, `utils/dsp_live.py`, `utils/live_audio.py`)
+
+- **Input:** Live browser mic via WebRTC
+- **Tunings:** Standard, Drop D, Half/Full step down, Open G, Open D, DADGAD
+- **Pitch detection:** autocorrelation + parabolic interpolation on a rolling buffer
+- **Needle:** Plotly gauge shows cents off the nearest string; green band = in tune (±5 ¢)
+- **Spectrum:** live FFT with the detected fundamental marked
+- **Guidance:** reports the nearest string, target Hz, and tune-up / tune-down direction
 
 ---
 
@@ -217,23 +273,39 @@ Load original song audio + user recording. Compare:
 
 ```
 RayMozic/
-├── app.py                  # Streamlit UI entry point
-├── run.ps1                 # Windows launcher (uses .venv Streamlit)
+├── app.py                  # Streamlit UI entry point (5 tabs)
+├── run.ps1                 # Windows launcher
 ├── requirements.txt
 ├── dsp_music_project.md    # This document
 │
 ├── features/
-│   ├── vocal_range.py      # Feature 1
-│   ├── scale_matcher.py    # Feature 2
-│   └── comparator.py       # Feature 3
+│   ├── vocal_range.py      # Vocal range/register (upload)
+│   ├── scale_matcher.py    # Key detection + capo recommendations
+│   └── comparator.py       # Reference-track comparison
 │
 ├── utils/
-│   ├── audio_io.py         # record, load, validate audio
-│   ├── pitch_utils.py      # hz↔note, cents, register classification
-│   └── chroma_utils.py     # chroma extraction, KS key detection, sanitization
+│   ├── audio_io.py         # load + validate uploaded audio
+│   ├── pitch_utils.py      # hz↔note, cents
+│   ├── chroma_utils.py     # chroma extraction, KS key detection
+│   ├── dsp_live.py         # autocorr + HPS pitch detection, PitchSmoother, FFT
+│   ├── voice_features.py   # spectral tilt, HNR, HF ratio, centroid, nasal ratio
+│   ├── register.py         # acoustic register classifier (explainable rules)
+│   ├── tuner.py            # tuning presets (+ Low C, custom), A4 reference
+│   ├── music_theory.py     # notes, chord parsing, diatonic scales/sevenths
+│   ├── chord_voicing.py    # fretboard voicing search + scoring (MoChord)
+│   ├── progression.py      # diatonic progression generator (MoChord local path)
+│   ├── play_along.py       # voice + fixed finger shapes → best capo
+│   ├── progression_capo_map.py  # fixed sounding prog → capo / scale map
+│   ├── visuals.py          # Plotly tuner meter, string pills, spectrum, fretboard
+│   ├── live_audio.py       # WebRTC mic capture + live processing loop
+│   └── results_store.py    # persist results + competitor benchmarks
 │
 └── tests/
-    └── test_chroma_dtw.py  # chroma sanitization, validation, comparator guards
+    ├── test_chroma_dtw.py       # chroma/DTW guards
+    ├── test_results_store.py    # result persistence
+    ├── test_live_dsp.py         # live pitch detection + tuner
+    ├── test_voice_features.py   # acoustic features + register classifier
+    └── test_chords.py           # HPS, smoother, voicings, progressions
 ```
 
 ---
@@ -241,37 +313,88 @@ RayMozic/
 ## UI Flow (Streamlit)
 
 ```
-Sidebar: Upload reference audio (Feature 3)
+Sidebar: Upload reference audio (for Voice Comparator)
 
-Tab 1: Vocal Range Analysis
-  - Upload or record (5–15 sec)
-  - Output: Low / Modal / High note, register, nasal flag
-  - Saves vocal audio to session state for Tab 2
+Tab 1: Guitar Tuner (Live)
+  - Select tuning; START mic
+  - Output: strobe-style horizontal meter (flat ◀ in-tune ▶ sharp) with big note
+    name + FLAT/SHARP/IN-TUNE hint, a string-pill row highlighting the active
+    string, and the live FFT spectrum with the detected fundamental marked
 
-Tab 2: Guitar Scale Matcher
-  - Requires Tab 1 analysis first
-  - Input: chord progression text (default "G Em C D")
-  - Output: Detected key/mode, confidence, top 3 capo recommendations, transposed chords
+Tab 2: Vocal Range
+  - Live mic (accumulating range) OR upload
+  - Output: Low / Modal / High note; register with confidence bar + acoustic
+    feature metrics (tilt, HNR, HF energy, brightness) + "why this register"
+    evidence; belt & nasal flags; FFT spectrum
 
-Tab 3: Voice Comparator
-  - Requires sidebar reference upload
-  - Upload or record user vocal
-  - Output: Mean cents deviation, vibrato, dynamic similarity %, pitch alignment plot
+Tab 3: Key, Capo & Chords (voice match)
+  - Upload vocal + your finger shapes → best capo to match your voice
+  - Same shapes at each fret sound *different*; we score voice fit
+
+Tab 4: Progression & Capo Map (theory / exploration)
+  - Enter sounding progression (e.g. G Em C D) → keys/scales it fits
+  - Capo table: same sound at every fret, finger shapes change
+  - Open-family table (G/A/C/D/E/F): capo + shapes to reach that sound in the key
+
+Tab 5: Voice Comparator
+  - Requires sidebar reference upload; upload your vocal
+  - Output: mean cents deviation, vibrato, dynamic similarity %, pitch alignment plot
+
+Tab 5: Results & Benchmarks
+  - Saved-run history, JSON export, competitor comparison links
 ```
 
 ---
 
+## Delivered in v0.2
+
+- Live browser-mic pitch tracking (WebRTC) with a calibrated tuner needle
+- Live FFT spectrum with the detected fundamental highlighted
+- Dedicated Guitar Tuner tab with tuning presets and tune-up/down guidance
+- Removed server-side `sounddevice` recording from the UI (upload or live only)
+- Capo ranking now flags impractical high-fret positions instead of dead-branching
+
+## Delivered in v0.3 (from GuitarTuner + MoChord)
+
+- **HPS pitch detector** (GuitarTuner) selectable alongside autocorrelation
+- **PitchSmoother**: median smoothing, dropout hold, octave-jump correction (MoChord)
+- **Note-stability counter + in-tune confirmation** in the tuner (GuitarTuner)
+- **Adjustable A4 reference (432–445 Hz)**, **Low C** tuning, **custom tuning** (both)
+- **Smart chord-voicing recommender** with fretboard diagrams (MoChord)
+- **Offline diatonic progression generator** (MoChord's local/fallback path)
+
+## Delivered in v0.5 (unified play-along)
+
+- **Merged Guitar Scale Matcher + Chord Progression** into one **Key, Capo & Chords** tab
+- **Auto chord progression** from detected key (Pop pattern for major, Andalusian for minor)
+- **Full capo playbook** — all six open-chord families with finger shapes, sounding chords, and beginner explanations
+- **Capo transpose fix** — shapes are transposed *down* by capo fret (correct physical fingering)
+- **Beginner-first layout** with optional customization expander and integrated fretboard diagrams
+
+## Delivered in v0.4 (acoustic register + tuner UI)
+
+- **Feature-based register classifier** — spectral tilt (power-weighted), HNR (Boersma autocorrelation), HF-energy ratio, spectral centroid, and nasal-band ratio combined via explainable weighted rules into `{Chest, Mixed, Head, Falsetto}` with confidence, per-register scores, and human-readable evidence.
+- **Belt detection** — high pitch with chest-like shallow tilt + strong HF energy.
+- **Redesigned tuner UI** — strobe-style horizontal meter with directional FLAT/SHARP/IN-TUNE hints, an active-string pill row, and Hz→target readout (replaces the single radial needle).
+- **Removed** the redundant pitch-only `classify_register` and the meaningless "modal pitch vs nearest note" needle on the vocal upload view.
+
+## Credits / Upstream Mechanisms
+
+- **[TomSchimansky/GuitarTuner](https://github.com/TomSchimansky/GuitarTuner)** — HPS on a zero-padded FFT buffer, cents/note math, needle smoothing, note-stability and in-tune confirmation, adjustable A4.
+- **[Mocha-Yuan/MoChord](https://github.com/Mocha-Yuan/MoChord)** — tuner signal chain (RMS gating, clarity threshold, median smoothing, dropout hold, octave-jump correction), tuning presets + custom + A4 range, smart voicing scoring, and the local (non-AI) progression generation path.
+
 ## Future Enhancements (Not Yet Implemented)
 
-These objectives remain valid but are not part of the foundation app:
+These objectives remain valid but are not yet built:
 
-- Capo inversion heuristic when `capo_fret > 6` (full alternate-shape logic)
-- Per-frame dominant register voting (currently uses modal pitch only)
-- Cosine similarity scoring of guitar keys against singer chroma (current ranking uses capo fret heuristic)
-- `data/guitar_keys.json` external chord/capo reference data
-- HNR and broader voice-quality metrics in the UI
-- pYIN pitch tracking option for improved octave accuracy
-- Expanded test coverage and sample audio fixtures
+- **Formant estimation (F1–F4)** via LP / weighted LP + root finding (for vowel/register nuance).
+- **Glottal source modeling** via LP inverse filtering to derive closed quotient and normalized amplitude quotient (QA).
+- Optional small trained classifier (e.g. logistic regression) over the existing feature vector once labeled data is collected.
+- Live per-frame register voting (currently the register decision runs on uploaded/segmented audio, which needs a spectral window).
+- Reference-tone playback per string in the tuner.
+- AI-backed progression generation (MoChord uses DeepSeek; ours is local-only).
+- Metronome / practice-mode loop and Tone.js-style chord audition.
+- Sample audio fixtures for end-to-end tests.
 
 ---
 
@@ -289,5 +412,10 @@ These objectives remain valid but are not part of the foundation app:
 | Vocal formants / registers | https://home.cc.umanitoba.ca/~robh/acoustics.html |
 | Voice science | https://www.voicescienceworks.org/ |
 | Praat (voice analysis tool) | https://www.fon.hum.uva.nl/praat/ |
+| Chest vs. head register acoustics/laryngeal markers | https://pubmed.ncbi.nlm.nih.gov/ (search "Laryngeal and Acoustic Analysis of Chest and Head Register") |
+| HNR (Boersma autocorrelation method) | https://www.fon.hum.uva.nl/paul/papers/Proceedings_1993.pdf |
+| Formant estimation from LP data | https://en.wikipedia.org/wiki/Linear_predictive_coding |
+| Weighted LP for high-pitched singing formants | https://acris.aalto.fi/ (search "weighted linear prediction formant singing") |
+| Source–filter / glottal modeling (Rabiner & Schafer) | https://www.pearson.com/en-us/subject-catalog/p/digital-processing-of-speech-signals/ |
 | DTW in librosa | https://librosa.org/doc/latest/generated/librosa.sequence.dtw.html |
 | MIR evaluation metrics | https://craffel.github.io/mir_eval/ |

@@ -1,56 +1,47 @@
 import librosa
 import numpy as np
-from scipy.signal import welch
-from utils.pitch_utils import hz_to_note, classify_register
+
+from utils.pitch_utils import hz_to_note
 from utils.audio_io import validate_audio_signal, AudioValidationError
+from utils.voice_features import extract_features
+from utils.register import classify_register_features
+
 
 def analyze_vocal_range(audio: np.ndarray, sr: int = 22050) -> dict:
     """
-    Analyzes the vocal range, modal pitch, register, and checks for nasal formants.
-    Returns a dictionary of the results.
+    Analyze vocal range and register.
+
+    Range comes from the YIN f0 track (5th/95th percentile + median). The
+    register is classified acoustically (spectral tilt, HF energy, HNR, pitch)
+    rather than by pitch alone — see utils/register.classify_register_features.
     """
     try:
         validate_audio_signal(audio, sr, label="Vocal")
     except AudioValidationError as exc:
         return {"error": str(exc)}
 
-    # 1. Pitch Tracking (using pYIN for better vocal accuracy, fallback to YIN if needed)
-    # pYIN is slower but avoids octave errors. We'll use YIN here for speed in Streamlit, 
-    # but in a production app, pYIN is better. Let's stick to YIN as per spec for fast response,
-    # or use pYIN if the audio is short enough. We'll use librosa.yin for responsiveness.
-    f0 = librosa.yin(audio, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), sr=sr)
-    f0_voiced = f0[f0 > 0]
-    
-    if len(f0_voiced) == 0:
+    feat = extract_features(audio, sr)
+    if feat.f0_median <= 0:
         return {"error": "No pitched voice detected."}
-        
-    # 2. Compute Range
-    low_hz = np.percentile(f0_voiced, 5)
-    high_hz = np.percentile(f0_voiced, 95)
-    modal_hz = np.median(f0_voiced)
-    
-    # 3. Classify Register
-    register = classify_register(modal_hz)
-    
-    # 4. Nasal Detection via Formant Energy (PSD)
-    freqs, psd = welch(audio, fs=sr, nperseg=1024)
-    
-    nasal_low = np.mean(psd[(freqs > 200) & (freqs < 300)])
-    nasal_high = np.mean(psd[(freqs > 2000) & (freqs < 3000)])
-    mid_band = np.mean(psd[(freqs > 500) & (freqs < 1500)])
-    
-    # Avoid division by zero
-    if mid_band == 0: mid_band = 1e-10
-    
-    is_nasal = (nasal_low > mid_band * 1.5) and (nasal_high > mid_band * 1.2)
-    
+
+    reg = classify_register_features(feat)
+
     return {
-        "low_note": hz_to_note(low_hz),
-        "high_note": hz_to_note(high_hz),
-        "modal_note": hz_to_note(modal_hz),
-        "low_hz": float(low_hz),
-        "high_hz": float(high_hz),
-        "modal_hz": float(modal_hz),
-        "register": register,
-        "is_nasal": is_nasal
+        "low_note": hz_to_note(feat.f0_low),
+        "high_note": hz_to_note(feat.f0_high),
+        "modal_note": hz_to_note(feat.f0_median),
+        "low_hz": feat.f0_low,
+        "high_hz": feat.f0_high,
+        "modal_hz": feat.f0_median,
+        "register": reg.register,
+        "register_confidence": reg.confidence,
+        "is_belt": reg.is_belt,
+        "is_nasal": reg.is_nasal,
+        "register_reasons": reg.reasons,
+        "register_scores": reg.scores,
+        # Acoustic features (exposed for display / benchmarking).
+        "spectral_tilt_db_per_khz": round(feat.spectral_tilt, 2),
+        "hnr_db": round(feat.hnr_db, 2),
+        "hf_energy_ratio": round(feat.hf_ratio, 3),
+        "spectral_centroid_hz": round(feat.centroid_hz, 1),
     }

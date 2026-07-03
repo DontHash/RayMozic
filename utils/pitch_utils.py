@@ -23,17 +23,3 @@ def cents_deviation(f_measured: float, f_target: float) -> float:
     if f_measured <= 0 or f_target <= 0:
         return 0.0
     return 1200 * np.log2(f_measured / f_target)
-
-def classify_register(hz: float) -> str:
-    """
-    Classify the voice register based on approximate physiological boundaries.
-    Chest voice: < 350 Hz
-    Mixed / Neck: 350 - 600 Hz
-    Head / Falsetto: > 600 Hz
-    """
-    if hz < 350:
-        return "Chest Voice"
-    elif hz < 600:
-        return "Mixed / Neck Voice"
-    else:
-        return "Head Voice / Falsetto"

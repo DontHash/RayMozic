@@ -20,31 +20,35 @@ def match_guitar_scale(audio: np.ndarray, sr: int = 22050) -> dict:
     vocal_key, vocal_mode, confidence = detect_key(chroma_mean)
     vocal_key_idx = NOTE_NAMES.index(vocal_key)
     
-    # 2. Capo Recommendations
+    # 2. Capo Recommendations.
+    # For every open-chord shape, the capo fret that makes it *sound* in the
+    # singer's key is fixed: capo = (vocal_root - shape_root) mod 12. So the
+    # sounding key is always the vocal key; the useful choice is which shape
+    # reaches it with the smallest, most playable capo. Capos above the 7th
+    # fret are cramped, so we rank by a practicality score (low fret = better)
+    # and flag impractical ones instead of silently keeping them.
     recommendations = []
     for shape_key, shape_idx in GUITAR_KEYS.items():
         capo = (vocal_key_idx - shape_idx) % 12
-        if capo > 6:
-            # If capo is too high on the neck, invert direction (play higher chord shape with no capo or lower capo)
-            # Actually, standard capo logic: if capo > 6, it might be better to just use a different shape.
-            # We'll just penalize it or keep it as an option.
-            pass
-            
+        practical = capo <= 7
+        # Lower capo scores higher; impractical capos are penalized.
+        score = (12 - capo) - (0 if practical else 12)
         recommendations.append({
             'chord_shape': shape_key,
             'capo_fret': capo,
-            # We can use a simple score: lower capo is better, but this is a heuristic
-            'score': 12 - capo 
+            'sounding_key': vocal_key,
+            'practical': practical,
+            'score': score,
         })
-        
-    # Sort by lowest capo fret
-    recommendations.sort(key=lambda x: x['capo_fret'])
-    
+
+    # Prefer practical, low-fret positions.
+    recommendations.sort(key=lambda x: (not x['practical'], x['capo_fret']))
+
     return {
         "vocal_key": vocal_key,
         "vocal_mode": vocal_mode,
         "confidence": confidence,
-        "recommendations": recommendations[:3] # Top 3
+        "recommendations": recommendations[:3],  # Top 3
     }
 
 def transpose_progression(progression: str, semitones: int) -> str:
