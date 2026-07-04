@@ -1,8 +1,4 @@
-"""Plotly figures for live feedback: a tuner needle gauge and an FFT spectrum.
-
-Both are pure functions returning `go.Figure` so they can be dropped into a
-Streamlit placeholder and redrawn every frame.
-"""
+"""Plotly figures — minimal, readable, tool-like (not dashboard-flashy)."""
 
 from __future__ import annotations
 
@@ -11,9 +7,67 @@ from typing import Optional, Sequence
 import numpy as np
 import plotly.graph_objects as go
 
-# Cents window shown on the needle dial.
 CENTS_RANGE = 50.0
 IN_TUNE_CENTS = 5.0
+
+# Restrained palette
+C_TEXT = "#d0d0d0"
+C_MUTED = "#7a7a7a"
+C_GRID = "#2e2e2e"
+C_LINE = "#6a8fb5"
+C_FILL = "rgba(106, 143, 181, 0.18)"
+C_OK = "#5d8a6a"
+C_WARN = "#a68b4b"
+C_BAD = "#9e5a5a"
+C_MARK = "#c4a35a"
+C_BG = "rgba(0,0,0,0)"
+
+
+def _layout(fig: go.Figure, *, height: int, margin: dict | None = None) -> go.Figure:
+    fig.update_layout(
+        height=height,
+        margin=margin or dict(l=48, r=16, t=12, b=36),
+        paper_bgcolor=C_BG,
+        plot_bgcolor=C_BG,
+        font={"family": "Inter, system-ui, sans-serif", "color": C_TEXT, "size": 12},
+        showlegend=False,
+    )
+    return fig
+
+
+def _axis(fig: go.Figure, x_title: str = "", y_title: str = "") -> go.Figure:
+    fig.update_xaxes(
+        title=x_title,
+        title_font={"size": 11, "color": C_MUTED},
+        tickfont={"size": 10, "color": C_MUTED},
+        gridcolor=C_GRID,
+        gridwidth=1,
+        zeroline=False,
+        linecolor=C_GRID,
+        mirror=False,
+    )
+    fig.update_yaxes(
+        title=y_title,
+        title_font={"size": 11, "color": C_MUTED},
+        tickfont={"size": 10, "color": C_MUTED},
+        gridcolor=C_GRID,
+        gridwidth=1,
+        zeroline=False,
+        linecolor=C_GRID,
+        mirror=False,
+    )
+    return fig
+
+
+def _tune_color(cents: Optional[float]) -> str:
+    if cents is None:
+        return C_MUTED
+    a = abs(cents)
+    if a <= IN_TUNE_CENTS:
+        return C_OK
+    if a <= 20:
+        return C_WARN
+    return C_BAD
 
 
 def needle_figure(
@@ -22,60 +76,38 @@ def needle_figure(
     detail: str = "",
     in_tune_cents: float = IN_TUNE_CENTS,
 ) -> go.Figure:
-    """
-    A tuner dial: needle points to the cents deviation (-50..+50).
-    Green center band = in tune; red flanks = flat/sharp.
-    """
     value = 0.0 if cents is None else float(np.clip(cents, -CENTS_RANGE, CENTS_RANGE))
-    if cents is None:
-        bar_color = "#888888"
-    elif abs(cents) <= in_tune_cents:
-        bar_color = "#2ecc71"
-    elif abs(cents) <= 20:
-        bar_color = "#f1c40f"
-    else:
-        bar_color = "#e74c3c"
-
-    title_text = f"<b>{note_label}</b>"
+    color = _tune_color(cents)
+    title = f"{note_label}"
     if detail:
-        title_text += f"<br><span style='font-size:0.6em;color:#aaa'>{detail}</span>"
+        title += f"<br><span style='font-size:11px;color:{C_MUTED}'>{detail}</span>"
 
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
             value=value,
-            number={"suffix": " ¢", "font": {"size": 34}},
-            title={"text": title_text, "font": {"size": 40}},
+            number={"suffix": " ¢", "font": {"size": 22, "color": C_TEXT}},
+            title={"text": title, "font": {"size": 26, "color": color}},
             gauge={
                 "axis": {
                     "range": [-CENTS_RANGE, CENTS_RANGE],
                     "tickmode": "array",
-                    "tickvals": [-50, -25, -in_tune_cents, 0, in_tune_cents, 25, 50],
-                    "ticktext": ["-50", "-25", "", "0", "", "+25", "+50"],
+                    "tickvals": [-50, -25, 0, 25, 50],
+                    "ticktext": ["-50", "-25", "0", "+25", "+50"],
+                    "tickfont": {"size": 9, "color": C_MUTED},
                 },
-                "bar": {"color": bar_color, "thickness": 0.25},
+                "bar": {"color": color, "thickness": 0.18},
+                "bgcolor": C_BG,
+                "borderwidth": 0,
                 "steps": [
-                    {"range": [-CENTS_RANGE, -20], "color": "#3a1f1f"},
-                    {"range": [-20, -in_tune_cents], "color": "#3a331f"},
-                    {"range": [-in_tune_cents, in_tune_cents], "color": "#1f3a24"},
-                    {"range": [in_tune_cents, 20], "color": "#3a331f"},
-                    {"range": [20, CENTS_RANGE], "color": "#3a1f1f"},
+                    {"range": [-CENTS_RANGE, -in_tune_cents], "color": "rgba(158,90,90,0.12)"},
+                    {"range": [-in_tune_cents, in_tune_cents], "color": "rgba(93,138,106,0.15)"},
+                    {"range": [in_tune_cents, CENTS_RANGE], "color": "rgba(158,90,90,0.12)"},
                 ],
-                "threshold": {
-                    "line": {"color": "white", "width": 4},
-                    "thickness": 0.85,
-                    "value": value,
-                },
             },
         )
     )
-    fig.update_layout(
-        height=320,
-        margin=dict(l=30, r=30, t=90, b=10),
-        paper_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"},
-    )
-    return fig
+    return _layout(fig, height=220, margin=dict(l=24, r=24, t=48, b=8))
 
 
 def tuner_meter_figure(
@@ -85,124 +117,71 @@ def tuner_meter_figure(
     detected_hz: Optional[float] = None,
     in_tune_cents: float = IN_TUNE_CENTS,
 ) -> go.Figure:
-    """
-    Clean horizontal strobe-style tuner meter (GuitarTuna-like).
-
-    A center green zone marks "in tune"; the marker slides left (flat) or right
-    (sharp). Large note name in the middle, with FLAT / SHARP direction hints.
-    """
     has = cents is not None
     value = 0.0 if not has else float(np.clip(cents, -CENTS_RANGE, CENTS_RANGE))
-    if not has:
-        accent = "#8a8f98"
-    elif abs(cents) <= in_tune_cents:
-        accent = "#2ecc71"
-    elif abs(cents) <= 20:
-        accent = "#f1c40f"
-    else:
-        accent = "#e74c3c"
+    accent = _tune_color(cents)
 
     fig = go.Figure()
+    fig.add_shape(type="rect", x0=-CENTS_RANGE, x1=CENTS_RANGE, y0=0.35, y1=0.65,
+                  fillcolor="rgba(255,255,255,0.04)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=-in_tune_cents, x1=in_tune_cents, y0=0.35, y1=0.65,
+                  fillcolor="rgba(93,138,106,0.2)", line_width=0, layer="below")
+    fig.add_shape(type="line", x0=0, x1=0, y0=0.2, y1=0.8,
+                  line={"color": C_MUTED, "width": 1, "dash": "dot"})
 
-    # Colored background zones (flat red | warn | in-tune green | warn | sharp red).
-    zones = [
-        (-CENTS_RANGE, -20, "#40232a"),
-        (-20, -in_tune_cents, "#40391f"),
-        (-in_tune_cents, in_tune_cents, "#1f4029"),
-        (in_tune_cents, 20, "#40391f"),
-        (20, CENTS_RANGE, "#40232a"),
-    ]
-    for x0, x1, color in zones:
-        fig.add_shape(type="rect", x0=x0, x1=x1, y0=0, y1=1,
-                      fillcolor=color, line_width=0, layer="below")
-
-    # Center reference line and tick marks.
-    for tick in (-50, -25, 0, 25, 50):
-        fig.add_shape(type="line", x0=tick, x1=tick, y0=0, y1=1,
-                      line={"color": "#5a606b", "width": 2 if tick == 0 else 1})
-
-    # The moving marker.
     if has:
-        fig.add_shape(type="line", x0=value, x1=value, y0=-0.05, y1=1.05,
-                      line={"color": accent, "width": 6})
-        fig.add_trace(go.Scatter(
-            x=[value], y=[1.16], mode="markers",
-            marker={"symbol": "triangle-down", "size": 20, "color": accent},
-            hoverinfo="skip", showlegend=False,
-        ))
+        fig.add_shape(type="line", x0=value, x1=value, y0=0.15, y1=0.85,
+                      line={"color": accent, "width": 3})
 
-    # Big note label.
-    fig.add_annotation(x=0, y=0.5, text=f"<b>{note_label}</b>", showarrow=False,
-                       font={"size": 54, "color": accent})
+    note_y = 0.92
+    fig.add_annotation(x=0, y=note_y, text=f"<b>{note_label}</b>", showarrow=False,
+                       font={"size": 36, "color": accent if has else C_MUTED})
 
-    # Cents readout + direction hint.
     if has:
         sign = "+" if value > 0 else ""
-        direction = "IN TUNE" if abs(cents) <= in_tune_cents else ("TUNE DOWN ▼" if cents > 0 else "▲ TUNE UP")
-        sub = f"{sign}{value:.1f}¢"
+        hint = "in tune" if abs(cents) <= in_tune_cents else ("flat" if cents > 0 else "sharp")
+        sub = f"{sign}{value:.1f} ¢ · {hint}"
         if detected_hz and target_hz:
-            sub += f"   ·   {detected_hz:.1f} Hz → {target_hz:.1f} Hz"
-        fig.add_annotation(x=0, y=-0.32, text=sub, showarrow=False,
-                           font={"size": 16, "color": "#c8ccd2"})
-        fig.add_annotation(x=0, y=1.42, text=direction, showarrow=False,
-                           font={"size": 18, "color": accent})
+            sub += f" · {detected_hz:.0f} / {target_hz:.0f} Hz"
+        fig.add_annotation(x=0, y=0.08, text=sub, showarrow=False,
+                           font={"size": 12, "color": C_MUTED})
 
-    # Flat / sharp edge labels.
-    fig.add_annotation(x=-CENTS_RANGE, y=1.42, text="♭ flat", showarrow=False,
-                       font={"size": 14, "color": "#8a8f98"}, xanchor="left")
-    fig.add_annotation(x=CENTS_RANGE, y=1.42, text="sharp ♯", showarrow=False,
-                       font={"size": 14, "color": "#8a8f98"}, xanchor="right")
-
-    fig.update_xaxes(range=[-CENTS_RANGE - 2, CENTS_RANGE + 2], showgrid=False,
-                     zeroline=False, showticklabels=True,
-                     tickvals=[-50, -25, 0, 25, 50], ticktext=["-50", "-25", "0", "+25", "+50"],
-                     tickfont={"color": "#8a8f98", "size": 11})
-    fig.update_yaxes(range=[-0.5, 1.6], showgrid=False, zeroline=False, showticklabels=False)
-    fig.update_layout(
-        height=240, margin=dict(l=20, r=20, t=30, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"}, showlegend=False,
+    fig.update_xaxes(
+        range=[-CENTS_RANGE - 4, CENTS_RANGE + 4],
+        tickvals=[-50, -25, 0, 25, 50],
+        ticktext=["♭50", "♭25", "0", "♯25", "♯50"],
+        showgrid=False, zeroline=False,
     )
-    return fig
+    fig.update_yaxes(range=[0, 1], showticklabels=False, showgrid=False, zeroline=False)
+    return _layout(fig, height=160, margin=dict(l=12, r=12, t=8, b=8))
 
 
 def string_status_figure(targets, active_string: Optional[int], cents_by_string: dict) -> go.Figure:
-    """
-    Row of string "pills" showing each open string of the tuning; the active
-    string is highlighted and tinted by how in-tune it is.
-    """
-    fig = go.Figure()
-    n = len(targets)
-    for idx, tgt in enumerate(targets):
-        x = idx
-        cents = cents_by_string.get(tgt.string_number)
-        if tgt.string_number == active_string and cents is not None:
-            if abs(cents) <= IN_TUNE_CENTS:
-                color = "#2ecc71"
-            elif abs(cents) <= 20:
-                color = "#f1c40f"
-            else:
-                color = "#e74c3c"
-            border = "white"
+    labels = [t.label for t in targets]
+    nums = [str(t.string_number) for t in targets]
+    colors = []
+    for t in targets:
+        c = cents_by_string.get(t.string_number)
+        if t.string_number == active_string and c is not None:
+            colors.append(_tune_color(c))
         else:
-            color = "#2b3038"
-            border = "#4a505a"
-        fig.add_shape(type="circle", x0=x - 0.42, x1=x + 0.42, y0=-0.42, y1=0.42,
-                      fillcolor=color, line={"color": border, "width": 2})
-        fig.add_annotation(x=x, y=0, text=f"<b>{tgt.label}</b>", showarrow=False,
-                           font={"size": 16, "color": "#f0f0f0"})
-        fig.add_annotation(x=x, y=-0.62, text=f"{tgt.string_number}", showarrow=False,
-                           font={"size": 11, "color": "#8a8f98"})
+            colors.append("#3a3a3a")
 
-    fig.update_xaxes(range=[-0.7, n - 0.3], showgrid=False, zeroline=False, showticklabels=False)
-    fig.update_yaxes(range=[-0.9, 0.7], showgrid=False, zeroline=False, showticklabels=False,
-                     scaleanchor="x", scaleratio=1)
-    fig.update_layout(
-        height=110, margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"}, showlegend=False,
-    )
-    return fig
+    fig = go.Figure(go.Bar(
+        x=labels, y=[1] * len(labels),
+        marker={"color": colors, "line": {"width": 0}},
+        hoverinfo="skip",
+        width=0.55,
+    ))
+    for i, (lab, num) in enumerate(zip(labels, nums)):
+        fig.add_annotation(x=lab, y=0.5, text=lab, showarrow=False,
+                           font={"size": 13, "color": C_TEXT})
+        fig.add_annotation(x=lab, y=-0.15, text=num, showarrow=False,
+                           font={"size": 9, "color": C_MUTED})
+
+    fig.update_yaxes(visible=False, range=[-0.3, 1.2])
+    fig.update_xaxes(showgrid=False, showticklabels=False)
+    return _layout(fig, height=72, margin=dict(l=8, r=8, t=4, b=28))
 
 
 def spectrum_figure(
@@ -210,58 +189,64 @@ def spectrum_figure(
     mags: Sequence[float],
     highlight_hz: Optional[float] = None,
     fmax: float = 2000.0,
-    title: str = "Live FFT Spectrum",
+    title: str = "",
+    extra_markers_hz: Optional[Sequence[float]] = None,
 ) -> go.Figure:
-    """
-    Frequency-domain view. Optionally marks the frequency that drives the
-    detected note with a vertical line, so you can see what leads to what.
-    """
     freqs = np.asarray(freqs, dtype=float)
     mags = np.asarray(mags, dtype=float)
+    mask = freqs <= fmax
+    freqs, mags = freqs[mask], mags[mask]
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=freqs,
-            y=mags,
-            mode="lines",
-            fill="tozeroy",
-            line={"color": "#4aa3ff", "width": 1.5},
-            name="Magnitude",
-            hovertemplate="%{x:.1f} Hz<br>%{y:.2f}<extra></extra>",
-        )
-    )
+    fig.add_trace(go.Scatter(
+        x=freqs, y=mags, mode="lines",
+        line={"color": C_LINE, "width": 1.2},
+        fill="tozeroy", fillcolor=C_FILL,
+        hovertemplate="%{x:.0f} Hz<extra></extra>",
+    ))
 
-    if highlight_hz and highlight_hz > 0:
-        fig.add_vline(
-            x=highlight_hz,
-            line={"color": "#2ecc71", "width": 2, "dash": "dash"},
-            annotation_text=f"f0 ≈ {highlight_hz:.1f} Hz",
-            annotation_position="top",
-            annotation_font_color="#2ecc71",
+    if highlight_hz and highlight_hz > 0 and highlight_hz <= fmax:
+        fig.add_vline(x=highlight_hz, line={"color": C_OK, "width": 1.5})
+        fig.add_annotation(
+            x=highlight_hz, y=1.02, yref="paper", text=f"{highlight_hz:.0f} Hz",
+            showarrow=False, font={"size": 10, "color": C_OK}, xanchor="center",
         )
 
-    fig.update_layout(
-        height=280,
-        margin=dict(l=40, r=20, t=40, b=40),
-        title={"text": title, "font": {"size": 15}},
-        xaxis_title="Frequency (Hz)",
-        yaxis_title="Normalized magnitude",
-        xaxis={"range": [0, fmax]},
-        yaxis={"range": [0, 1.05]},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"},
-        showlegend=False,
-    )
-    return fig
+    for hz in extra_markers_hz or []:
+        if 0 < hz <= fmax:
+            fig.add_vline(x=hz, line={"color": C_MARK, "width": 1, "dash": "dot"})
+
+    fig.update_xaxes(range=[0, fmax])
+    fig.update_yaxes(range=[0, max(1.05, float(mags.max()) * 1.1) if len(mags) else 1.05], showticklabels=False)
+    _axis(fig, x_title="Hz")
+    if title:
+        fig.update_layout(title={"text": title, "font": {"size": 12, "color": C_MUTED}, "x": 0})
+    return _layout(fig, height=200)
+
+
+def capo_match_figure(rows: list[dict], highlight_fret: Optional[int] = None) -> go.Figure:
+    """Bar chart: voice-match score per capo fret."""
+    by_fret = sorted(rows, key=lambda r: r["capo_fret"])
+    frets = [r["capo_fret"] for r in by_fret]
+    scores = [r["match_score"] * 100 for r in by_fret]
+    colors = []
+    for r in by_fret:
+        if r["capo_fret"] == highlight_fret:
+            colors.append(C_OK)
+        elif r.get("matches_voice"):
+            colors.append(C_LINE)
+        else:
+            colors.append("#404040")
+
+    fig = go.Figure(go.Bar(x=frets, y=scores, marker_color=colors, width=0.7,
+                             hovertemplate="Capo %{x}<br>%{y:.0f}%<extra></extra>"))
+    fig.update_xaxes(dtick=1, title="Capo fret")
+    fig.update_yaxes(range=[0, 105], ticksuffix="%", title="Voice match")
+    _axis(fig)
+    return _layout(fig, height=200)
 
 
 def fretboard_figure(frets, open_midis, title: str = "", n_frets: int = 5) -> go.Figure:
-    """
-    Draw a vertical guitar chord diagram. `frets` is thickest->thinnest with
-    None = muted, 0 = open. Dots mark fretted notes; O/X above the nut.
-    """
     n_strings = len(frets)
     fretted = [f for f in frets if f and f > 0]
     start_fret = max(min(fretted), 1) if fretted else 1
@@ -269,80 +254,65 @@ def fretboard_figure(frets, open_midis, title: str = "", n_frets: int = 5) -> go
         start_fret = max(1, max(fretted, default=1) - (n_frets - 1))
 
     fig = go.Figure()
-
-    # Fret lines (horizontal) and string lines (vertical).
+    nut_w = 2 if start_fret == 1 else 1
     for r in range(n_frets + 1):
-        fig.add_shape(type="line", x0=0, x1=n_strings - 1, y0=r, y1=r,
-                      line={"color": "#888", "width": 3 if (start_fret == 1 and r == 0) else 1})
+        fig.add_shape(type="line", x0=-0.15, x1=n_strings - 0.85, y0=r, y1=r,
+                      line={"color": "#555", "width": nut_w if r == 0 else 1})
     for s in range(n_strings):
+        w = 2.5 if s == 0 else (1.5 if s == n_strings - 1 else 1)
         fig.add_shape(type="line", x0=s, x1=s, y0=0, y1=n_frets,
-                      line={"color": "#888", "width": 1})
+                      line={"color": "#555", "width": w})
 
-    # String index 0 is the thickest (6th). Draw thickest on the left.
-    dot_x, dot_y, markers, mx = [], [], [], []
+    dot_x, dot_y, mx, markers = [], [], [], []
     for s, f in enumerate(frets):
         if f is None:
-            markers.append("✕")
+            markers.append("×")
             mx.append(s)
         elif f == 0:
             markers.append("○")
             mx.append(s)
         else:
-            rel = f - start_fret + 0.5
             dot_x.append(s)
-            dot_y.append(rel)
+            dot_y.append(f - start_fret + 0.5)
 
     if dot_x:
         fig.add_trace(go.Scatter(
             x=dot_x, y=dot_y, mode="markers",
-            marker={"size": 22, "color": "#2ecc71", "line": {"color": "white", "width": 1}},
-            hoverinfo="skip", showlegend=False,
+            marker={"size": 16, "color": C_TEXT, "line": {"width": 0}},
+            hoverinfo="skip",
         ))
     for s, m in zip(mx, markers):
-        fig.add_annotation(x=s, y=-0.4, text=m, showarrow=False,
-                           font={"color": "#e0e0e0", "size": 16})
+        fig.add_annotation(x=s, y=-0.35, text=m, showarrow=False,
+                           font={"size": 12, "color": C_MUTED})
 
-    fig.update_yaxes(range=[n_frets, -0.8], showticklabels=(start_fret > 1),
+    if title:
+        fig.add_annotation(x=(n_strings - 1) / 2, y=n_frets + 0.35, text=title, showarrow=False,
+                           font={"size": 12, "color": C_TEXT})
+
+    fig.update_yaxes(range=[n_frets + 0.5, -0.55], showticklabels=start_fret > 1,
                      tickvals=[i + 0.5 for i in range(n_frets)],
-                     ticktext=[str(start_fret + i) for i in range(n_frets)])
-    fig.update_xaxes(range=[-0.6, n_strings - 0.4], showticklabels=False)
-    fig.update_layout(
-        height=260, width=200, title={"text": title, "font": {"size": 14}},
-        margin=dict(l=30, r=10, t=40, b=20),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"}, showlegend=False,
-    )
-    return fig
+                     ticktext=[str(start_fret + i) for i in range(n_frets)],
+                     tickfont={"size": 9, "color": C_MUTED})
+    fig.update_xaxes(range=[-0.35, n_strings - 0.65], showticklabels=False, showgrid=False)
+    fig.update_yaxes(showgrid=False)
+    return _layout(fig, height=200, margin=dict(l=16, r=8, t=8, b=16))
 
 
 def range_progress_figure(low_hz: float, high_hz: float, current_hz: float) -> go.Figure:
-    """Horizontal bar showing running vocal range with a live pitch marker."""
     fig = go.Figure()
+    xmin = max(50, low_hz * 0.9) if low_hz > 0 else 80
+    xmax = high_hz * 1.1 if high_hz > 0 else 500
+
     if low_hz > 0 and high_hz > low_hz:
-        fig.add_trace(
-            go.Bar(
-                x=[high_hz - low_hz],
-                y=["Range"],
-                base=[low_hz],
-                orientation="h",
-                marker={"color": "#4aa3ff"},
-                hovertemplate="%{base:.1f}–%{x:.1f} Hz<extra></extra>",
-            )
-        )
+        fig.add_shape(type="rect", x0=low_hz, x1=high_hz, y0=0.25, y1=0.75,
+                      fillcolor=C_FILL, line={"width": 0})
+
     if current_hz and current_hz > 0:
-        fig.add_vline(
-            x=current_hz,
-            line={"color": "#2ecc71", "width": 3},
-            annotation_text=f"{current_hz:.0f} Hz",
-            annotation_position="top",
-        )
-    fig.update_layout(
-        height=140,
-        margin=dict(l=20, r=20, t=30, b=30),
-        xaxis_title="Frequency (Hz)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font={"color": "#e0e0e0"},
-        showlegend=False,
-    )
-    return fig
+        fig.add_vline(x=current_hz, line={"color": C_OK, "width": 2})
+        fig.add_annotation(x=current_hz, y=0.9, text=f"{current_hz:.0f}", showarrow=False,
+                           font={"size": 10, "color": C_OK})
+
+    fig.update_xaxes(range=[xmin, xmax], title="Hz")
+    fig.update_yaxes(visible=False, range=[0, 1])
+    _axis(fig)
+    return _layout(fig, height=72, margin=dict(l=48, r=16, t=4, b=28))

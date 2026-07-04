@@ -25,6 +25,7 @@ from utils.dsp_live import (
     frequency_to_note,
 )
 from utils.visuals import (
+    capo_match_figure,
     fretboard_figure,
     needle_figure,
     range_progress_figure,
@@ -53,12 +54,9 @@ from features.comparator import compare_voices, VoiceComparisonError
 
 SR = 22050
 
-st.set_page_config(page_title="RayMozic — Live DSP Music Analysis", layout="wide")
-st.title("RayMozic — Live DSP Music Analysis & Guitar Tuner")
-st.markdown(
-    "Live microphone pitch tracking (FFT + autocorrelation), a calibrated tuner "
-    "needle, guitar tuning, vocal analysis, and reference comparison."
-)
+st.set_page_config(page_title="RayMozic", layout="wide", initial_sidebar_state="collapsed")
+st.title("RayMozic")
+st.caption("Live tuner · vocal analysis · capo & chord tools")
 
 with st.sidebar:
     st.header("Reference Audio")
@@ -109,11 +107,7 @@ tab_tuner, tab_vocal, tab_play, tab_capo_map, tab_compare, tab_results = st.tabs
 # TAB 1 — Guitar Tuner (live mic, needle + spectrum)
 # ----------------------------------------------------------------------------
 with tab_tuner:
-    st.header("Guitar Tuner — Live Microphone")
-    st.markdown(
-        "Pluck one string at a time. The needle shows cents off the target note; "
-        "the spectrum shows the live FFT with the detected fundamental marked."
-    )
+    st.header("Guitar tuner")
 
     ctrl1, ctrl2, ctrl3 = st.columns([2, 1, 1])
     tuning_choices = list(TUNINGS.keys()) + ["Custom"]
@@ -190,9 +184,9 @@ with tab_tuner:
                     note_label = match.string.label
                     active = match.string.string_number
                     if tstate["in_tune_hits"] >= HITS_TO_CONFIRM:
-                        status_ph.success(f"✓ String {active} ({match.string.label}) is in tune!")
+                        status_ph.caption(f"{match.string.label} — in tune")
                     elif tstate["note_hits"] >= HITS_TO_LOCK:
-                        status_ph.info(f"String {active} ({match.string.label}) — {tuning_direction(cents)}")
+                        status_ph.caption(f"{match.string.label} — {tuning_direction(cents)}")
                     else:
                         status_ph.empty()
 
@@ -228,7 +222,7 @@ with tab_tuner:
                     spectrum_figure(
                         freqs, mags,
                         highlight_hz=reading.frequency if reading.voiced else None,
-                        title="Live FFT Spectrum (guitar range)",
+                        fmax=1500.0,
                     ),
                     width="stretch",
                     key=f"tuner_spec_{i}",
@@ -246,15 +240,14 @@ with tab_tuner:
                 smooth=True,
             )
         else:
-            info_ph.info("Tuner idle. Press START above to begin live tuning.")
+            info_ph.caption("Press START to begin.")
 
 
 # ----------------------------------------------------------------------------
 # TAB 2 — Vocal Range (live mic OR upload)
 # ----------------------------------------------------------------------------
 with tab_vocal:
-    st.header("Vocal Range & Register")
-    st.markdown("Detect your range and register live, or analyze an uploaded clip. No local recording.")
+    st.header("Vocal range")
 
     mode = st.radio("Input mode", ["Live Microphone", "Upload File"], key="vocal_mode", horizontal=True)
 
@@ -318,7 +311,7 @@ with tab_vocal:
                         spectrum_figure(
                             freqs, mags,
                             highlight_hz=reading.frequency if reading.voiced else None,
-                            title="Live FFT Spectrum (voice)",
+                            fmax=2000.0,
                         ),
                         width="stretch",
                         key=f"vocal_spec_{i}",
@@ -393,10 +386,11 @@ with tab_vocal:
                     reg_label += " (belt characteristics)"
                 if results.get("is_nasal"):
                     reg_label += " · nasal resonance"
-                st.subheader(f"Register: {reg_label}")
+                st.subheader("Register")
+                st.write(reg_label)
                 st.progress(
                     min(max(results.get("register_confidence", 0.0), 0.0), 1.0),
-                    text=f"Classifier confidence: {results.get('register_confidence', 0.0)*100:.0f}%",
+                    text=f"{results.get('register_confidence', 0.0)*100:.0f}% confidence",
                 )
 
                 fcol1, fcol2, fcol3, fcol4 = st.columns(4)
@@ -407,17 +401,11 @@ with tab_vocal:
 
                 reasons = results.get("register_reasons", [])
                 if reasons:
-                    with st.expander("Why this register? (acoustic evidence)"):
+                    with st.expander("Register evidence"):
                         for r in reasons:
-                            st.markdown(f"- {r}")
-                        st.caption(
-                            "Register is inferred from spectral shape + pitch, not pitch alone: "
-                            "shallow tilt & strong high harmonics → chest/belt; steep tilt & energy "
-                            "near the fundamental → head/falsetto."
-                        )
+                            st.write(f"· {r}")
 
                 freqs, mags = analysis_spectrum(vocal_audio, SR, fmax=2000.0)
-                st.subheader("FFT Spectrum — frequency driving the analysis")
                 st.plotly_chart(
                     spectrum_figure(freqs, mags, highlight_hz=results["modal_hz"], fmax=2000.0),
                     width="stretch",
@@ -437,12 +425,7 @@ with tab_vocal:
 # TAB 3 — Key, Capo & Chords (scale match + auto progression + capo guide)
 # ----------------------------------------------------------------------------
 with tab_play:
-    st.header("Key, Capo & Chords")
-    st.markdown(
-        "Sing or upload a clip — we detect your key, then show **which capo fret "
-        "makes your chord shapes match your voice**. Your finger shapes stay the same; "
-        "only the capo position changes what the listener hears."
-    )
+    st.header("Key, capo & chords")
 
     src = st.radio(
         "Audio source",
@@ -470,7 +453,7 @@ with tab_play:
             if st.button("Analyze last vocal recording", type="primary", key="play_analyze_session"):
                 play_audio = st.session_state["last_vocal_audio"]
         else:
-            st.info("Run a Vocal Range analysis first, or upload a clip here.")
+            st.caption("Run vocal analysis first, or upload here.")
 
     finger_prog = st.text_input(
         "Your chord shapes (what you finger with no capo)",
@@ -502,132 +485,71 @@ with tab_play:
             st.error(str(exc))
         else:
             st.session_state["last_play_plan"] = plan
-
-            # --- What we heard ------------------------------------------------
-            st.subheader("1 · What we heard")
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Detected key", f"{plan['vocal_key']} {plan['vocal_mode']}")
-            k2.metric("Confidence", f"{plan['confidence']:.0%}")
-            k3.metric("Chord pattern", plan["pattern_label"])
-
-            st.info(plan["beginner_summary"])
-
             finger = plan["finger_progression"]
-            st.markdown(f"**Your shapes (fixed):** {' · '.join(finger)}")
+            best = plan["best_capo"]
 
-            if not plan.get("capo_zero_ok") and plan.get("capo_zero"):
-                st.warning(
-                    f"Capo 0 scores only **{plan['capo_zero']['match_score']:.0%}** against your voice "
-                    f"(sounds like ~{plan['capo_zero']['inferred_key']} {plan['capo_zero']['inferred_mode']}). "
-                    f"Try **capo {plan['best_capo']['capo_fret']}** instead."
+            st.divider()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Key", f"{plan['vocal_key']} {plan['vocal_mode']}")
+            c2.metric("Confidence", f"{plan['confidence']:.0%}")
+            c3.metric("Your shapes", " ".join(finger))
+            if best:
+                c4.metric("Best capo", f"fret {best['capo_fret']}", f"{best['match_score']:.0%} match")
+
+            if best:
+                st.write(
+                    f"Play **{' '.join(best['finger_chords'])}** at capo **{best['capo_fret']}** "
+                    f"→ sounds **{' '.join(best['sounding_chords'])}** ({best['inferred_key']} {best['inferred_mode']})"
                 )
-            elif plan.get("capo_zero_ok"):
-                st.success("Capo 0 already fits your voice well — no capo needed.")
+            elif plan.get("capo_zero") and not plan.get("capo_zero_ok"):
+                z = plan["capo_zero"]
+                st.write(f"Open strings score {z['match_score']:.0%} against your voice.")
 
-            root_freq = note_to_frequency(f"{plan['vocal_key']}3")
-            st.plotly_chart(
-                needle_figure(
-                    0.0,
-                    f"{plan['vocal_key']} {plan['vocal_mode']}",
-                    f"Root ≈ {root_freq:.1f} Hz",
-                ),
-                width="stretch",
-                key="play_needle",
-            )
-
+            root_markers = [
+                note_to_frequency(f"{plan['vocal_key']}{o}")
+                for o in range(2, 6)
+                if note_to_frequency(f"{plan['vocal_key']}{o}") <= 2000.0
+            ]
             freqs, mags = analysis_spectrum(play_audio, SR, fmax=2000.0)
             dom = dominant_frequency(freqs, mags)
-            spec = spectrum_figure(
-                freqs, mags, highlight_hz=dom, fmax=2000.0,
-                title="FFT — how we found your key",
-            )
-            for octave in range(2, 6):
-                f_oct = note_to_frequency(f"{plan['vocal_key']}{octave}")
-                if f_oct <= 2000.0:
-                    spec.add_vline(x=f_oct, line={"color": "#e67e22", "width": 1, "dash": "dot"})
-            st.plotly_chart(spec, width="stretch", key="play_spec")
-            st.caption(
-                "We fold all octaves into a 12-note **chroma** profile and match it to "
-                "major/minor key profiles (Krumhansl–Schmuckler). Orange markers = "
-                "octaves of your detected root."
+            st.plotly_chart(
+                spectrum_figure(
+                    freqs, mags, highlight_hz=dom, fmax=2000.0,
+                    extra_markers_hz=root_markers,
+                ),
+                width="stretch",
+                key="play_spec",
             )
 
-            # --- Best capo recommendation -------------------------------------
-            st.subheader("2 · Best capo for your shapes")
-            best = plan["best_capo"]
             if best:
-                b1, b2, b3 = st.columns(3)
-                b1.metric("Recommended capo", f"Fret {best['capo_fret']}")
-                b2.metric("Match to your voice", f"{best['match_score']:.0%}")
-                b3.metric("Sounds like", f"{best['inferred_key']} {best['inferred_mode']}")
-                st.markdown(
-                    f"Finger **{' · '.join(best['finger_chords'])}** → "
-                    f"audience hears **{' · '.join(best['sounding_chords'])}**"
+                st.plotly_chart(
+                    capo_match_figure(plan["capo_by_fret"], highlight_fret=best["capo_fret"]),
+                    width="stretch",
+                    key="play_capo_chart",
                 )
-                st.caption(best["explanation"])
 
-            # --- Capo scan (same shapes, different sound each fret) -----------
-            st.subheader("3 · Capo scan — same shapes, different keys")
-            st.markdown(
-                "Each row uses **the same finger shapes**. Only the capo changes — "
-                "so the chords the listener hears are **different** at every fret."
+            st.dataframe(
+                [
+                    {
+                        "Capo": row["capo_fret"],
+                        "Finger": " ".join(row["finger_chords"]),
+                        "Sounds": " ".join(row["sounding_chords"]),
+                        "Key": f"{row['inferred_key']} {row['inferred_mode']}",
+                        "Match": f"{row['match_score']:.0%}",
+                    }
+                    for row in plan["capo_by_fret"]
+                ],
+                width="stretch",
+                hide_index=True,
             )
 
-            def _capo_card(row, highlight=False):
-                border = "2px solid #2ecc71" if highlight else "1px solid #3a3f4b"
-                match_badge = " ✓ fits voice" if row["matches_voice"] else ""
-                st.markdown(
-                    f'<div style="border:{border};border-radius:8px;padding:12px;margin-bottom:8px">'
-                    f'<b>Capo fret {row["capo_fret"]}</b>{match_badge} · '
-                    f'match {row["match_score"]:.0%} · ~{row["inferred_key"]} {row["inferred_mode"]}</div>',
-                    unsafe_allow_html=True,
-                )
-                c_a, c_b = st.columns(2)
-                c_a.markdown(f"**You finger:** {' · '.join(row['finger_chords'])}")
-                c_b.markdown(f"**Listener hears:** {' · '.join(row['sounding_chords'])}")
-                st.caption(row["explanation"])
+            with st.expander("Other progressions in your key"):
+                for alt in plan.get("alternatives", [])[:3]:
+                    meta = alt["progression_meta"]
+                    chords = " → ".join(c["name"] for c in meta["progression"])
+                    st.write(f"{alt['pattern_label']}: {chords}")
 
-            top_matches = [r for r in plan["capo_by_fret"] if r["match_score"] >= 0.5][:3]
-            if top_matches:
-                st.markdown("#### Strongest matches")
-                for i, row in enumerate(top_matches):
-                    _capo_card(row, highlight=(row["capo_fret"] == best["capo_fret"]))
-
-            with st.expander("All capo frets (0–7)"):
-                for row in plan["capo_by_fret"]:
-                    _capo_card(row, highlight=(row["capo_fret"] == best["capo_fret"]))
-
-            table_rows = [
-                {
-                    "Capo": row["capo_fret"],
-                    "You finger": " – ".join(row["finger_chords"]),
-                    "Listener hears": " – ".join(row["sounding_chords"]),
-                    "Implied key": f"{row['inferred_key']} {row['inferred_mode']}",
-                    "Voice match": f"{row['match_score']:.0%}",
-                }
-                for row in plan["capo_by_fret"]
-            ]
-            st.dataframe(table_rows, width="stretch", hide_index=True)
-
-            # --- Alternative progressions in vocal key ------------------------
-            st.subheader("4 · Other progressions that fit your voice")
-            st.caption(
-                "Different chord sequences in your detected key — use these if you "
-                "want new material instead of capo-shifting your current shapes."
-            )
-            for alt in plan.get("alternatives", [])[:3]:
-                meta = alt["progression_meta"]
-                st.markdown(f"**{alt['pattern_label']}**")
-                st.markdown(
-                    "### "
-                    + "  →  ".join(
-                        f"`{c['name']}` ({c['roman']})" for c in meta["progression"]
-                    )
-                )
-
-            # --- Chord fingerings for recommended capo ------------------------
-            with st.expander("Fretboard diagrams (your shapes, no capo)"):
-                st.caption("Diagrams for the finger shapes you play — capo placement is separate.")
+            with st.expander("Fretboard diagrams"):
                 fing_cols = st.columns(min(len(finger), 4))
                 for col, chord in zip(fing_cols, finger[:4]):
                     with col:
@@ -640,11 +562,9 @@ with tab_play:
                                     width="stretch",
                                     key=f"play_v_{chord}",
                                 )
-                                st.caption(f"`{v.diagram_str}` · {v.fingers} finger(s)")
-                            else:
-                                st.write(f"**{chord}** — no open voicing in first 12 frets")
+                                st.caption(f"{v.diagram_str} · {v.fingers}f")
                         except ValueError:
-                            st.write(f"**{chord}**")
+                            st.write(chord)
 
             saved = save_result(
                 "scale_matcher",
@@ -671,12 +591,7 @@ with tab_play:
 # TAB 4 — Progression & Capo Map (sounding fixed → finger shapes per capo/scale)
 # ----------------------------------------------------------------------------
 with tab_capo_map:
-    st.header("Progression & Capo Map")
-    st.markdown(
-        "Enter a chord progression in the **sounding key** (what the listener hears). "
-        "We show which **keys/scales** it fits and how the **same progression repeats** "
-        "across capo frets and open-chord families — finger shapes change, the sound stays the same."
-    )
+    st.header("Progression & capo map")
 
     map_prog = st.text_input(
         "Sounding chord progression",
@@ -707,15 +622,11 @@ with tab_capo_map:
     if "capo_map_result" in st.session_state:
         m = st.session_state["capo_map_result"]
 
-        st.subheader("1 · Keys & scales this progression fits")
+        st.divider()
         k1, k2, k3 = st.columns(3)
-        k1.metric("Best-fit key", f"{m['inferred_key']} {m['inferred_mode']}")
+        k1.metric("Key", f"{m['inferred_key']} {m['inferred_mode']}")
         k2.metric("Diatonic fit", f"{m['diatonic_fit']:.0%}")
-        k3.metric("Chords", len(m["sounding_chords"]))
-        st.info(m["summary"])
-
-        st.markdown("### " + "  →  ".join(f"`{c}`" for c in m["sounding_chords"]))
-        st.caption("This is the fixed **sounding** sequence — it stays the same in every row below.")
+        k3.metric("Chords", " ".join(m["sounding_chords"]))
 
         if m["compatible_keys"]:
             st.dataframe(
@@ -723,77 +634,48 @@ with tab_capo_map:
                     {
                         "Key": f"{c['key']} {c['mode']}",
                         "Fit": f"{c['fit']:.0%}",
-                        "As Roman numerals": c["roman"],
+                        "Roman": c["roman"],
                     }
                     for c in m["compatible_keys"][:12]
                 ],
                 width="stretch",
                 hide_index=True,
             )
-        else:
-            st.warning("This progression is not fully diatonic in any single key — it may modulate or use borrowed chords.")
 
-        st.subheader("2 · Same sound at each capo fret")
-        st.markdown(
-            "The **listener always hears** the same chords. You change **finger shapes** "
-            "and **capo placement** to reach that sound from different positions on the neck."
-        )
-        for row in m["capo_rows"]:
-            st.markdown(
-                f"**Capo {row['capo_fret']}** — finger "
-                f"**{' · '.join(row['finger_chords'])}** → sounds "
-                f"**{' · '.join(row['sounding_chords'])}**"
-            )
-
-        capo_table = [
-            {
-                "Capo": row["capo_fret"],
-                "Finger shapes": " – ".join(row["finger_chords"]),
-                "Sounds like": " – ".join(row["sounding_chords"]),
-            }
-            for row in m["capo_rows"]
-        ]
-        st.dataframe(capo_table, width="stretch", hide_index=True)
-
-        st.subheader("3 · Open-chord families (G / A / C / D / E / F)")
-        st.markdown(
-            f"To sound in **{m['target_key']} {m['target_mode']}**, each open-key family "
-            f"uses a different capo and finger shape set for the same progression."
+        st.caption("Capo fret → finger shapes (sound stays the same)")
+        st.dataframe(
+            [
+                {
+                    "Capo": row["capo_fret"],
+                    "Finger": " ".join(row["finger_chords"]),
+                    "Sounds": " ".join(row["sounding_chords"]),
+                }
+                for row in m["capo_rows"]
+            ],
+            width="stretch",
+            hide_index=True,
         )
 
-        recommended = [r for r in m["shape_family_rows"] if r["recommended"]]
-        if recommended:
-            st.markdown("#### Easiest options (low capo)")
-            for row in recommended[:3]:
-                flag = "" if row["practical"] else " _(high fret)_"
-                st.markdown(
-                    f"**{row['chord_shape']}** + capo **{row['capo_fret']}**{flag}: "
-                    f"finger **{' · '.join(row['finger_chords'])}**"
-                )
-
-        with st.expander("All open-chord families"):
-            for row in m["shape_family_rows"]:
-                st.caption(row["explanation"])
-
-        shape_table = [
-            {
-                "Shape family": row["chord_shape"],
-                "Capo": row["capo_fret"],
-                "Finger shapes": " – ".join(row["finger_chords"]),
-                "Sounds like": " – ".join(row["sounding_chords"]),
-                "Easy?": "✓" if row["recommended"] else ("~" if row["practical"] else "hard"),
-            }
-            for row in m["shape_family_rows"]
-        ]
-        st.dataframe(shape_table, width="stretch", hide_index=True)
+        st.caption(f"Open families in {m['target_key']} {m['target_mode']}")
+        st.dataframe(
+            [
+                {
+                    "Family": row["chord_shape"],
+                    "Capo": row["capo_fret"],
+                    "Finger": " ".join(row["finger_chords"]),
+                }
+                for row in m["shape_family_rows"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # ----------------------------------------------------------------------------
 # TAB 5 — Voice Comparator (upload only)
 # ----------------------------------------------------------------------------
 with tab_compare:
-    st.header("Voice Modulation Comparator")
-    st.markdown("Compare an uploaded vocal against the reference track in the sidebar.")
+    st.header("Voice comparison")
 
     if ref_file is None:
         st.warning("Upload a Reference Track in the sidebar first.")
@@ -859,8 +741,7 @@ with tab_compare:
 # TAB 5 — Results & Benchmarks
 # ----------------------------------------------------------------------------
 with tab_results:
-    st.header("Saved Results & Competitor Benchmarks")
-    st.markdown("Analyses are saved locally under `results/`. Run the same audio through a competitor site and compare.")
+    st.header("Results")
 
     feature_filter = st.selectbox("Filter by feature", ["All", "vocal_range", "scale_matcher", "voice_comparison"])
     selected_feature = None if feature_filter == "All" else feature_filter
